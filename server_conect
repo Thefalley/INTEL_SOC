@@ -1,0 +1,217 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <fcntl.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/mman.h>
+
+#include <intelfpgaup/KEY.h>
+#include <intelfpgaup/SW.h>
+#include <intelfpgaup/HEX.h>
+#include <intelfpgaup/LEDR.h>
+#include <intelfpgaup/LCD.h>
+
+
+/*PREBOOT
+insmod ./LinuxLibraries/drivers/KEY.ko
+insmod ./LinuxLibraries/drivers/HEX.ko
+insmod ./LinuxLibraries/drivers/SW.ko
+insmod ./LinuxLibraries/drivers/LCD.ko
+insmod ./LinuxLibraries/drivers/LEDR.ko
+*/
+
+// Prototipos de funciones auxiliares
+int ctoi (char ch);
+
+#define PUERTO 8080
+#define TAMBUF 32
+
+int main()
+{
+	// Declaración de variables
+	char *COMANDOS[] = {"SHOW","TEST","WIPE"};
+	char *RESPUESTAS[] = {"OK","ER"};
+
+	// Control de respuesta
+	int flag_COM_RES = 1;
+	int param = 0;
+	//char **PANTALLA [] = {"OK", "ERROR", "CORRECTO", "Sin completar"};
+	char * PANTALLA [][3] = {
+        {"Pulsa un boton", "OK"}, 
+        {"Codifica el numero en binario y pulsa un boton", "ERROR", "CORRECTO"}, 
+        {"Apagar todo y pulsa un boton", "Sin completar", "OK"}, 
+        {"Hola!!", ";)", "IORITZ Y PABLO"}
+    };
+
+	// Variables de datos 
+	int ins = 0; // Valor escrito por usuario
+	int msg = 0; // Valor recivido por comando
+ 
+	// Interfaz de sockets
+	int sock; // SOCK_DGRAM -> UDP
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+	struct sockaddr_in servdir;
+	servdir.sin_family = AF_INET;
+	servdir.sin_addr.s_addr = htonl(INADDR_ANY);
+	servdir.sin_port = htons(PUERTO);
+
+	bind(sock, (struct sockaddr *)&servdir, sizeof servdir);
+
+    // Devices Drivers
+   LEDR_open();
+   SW_open();
+   KEY_open();
+   HEX_open();
+   LCD_open();
+
+   // Inicializar led y displays
+   LEDR_set(0); 
+   HEX_set(0);
+
+   // Variables SW
+   int key = 0;
+
+	// Borrar cualquier pixel del LCD
+	LCD_clear();
+	LCD_erase();
+
+	// Inicializar balores de LCD
+	LCD_text(0,0,PANTALLA[3][0]);
+	LCD_text(0,1,PANTALLA[3][1]);
+	LCD_text(0,2,PANTALLA[3][2]);
+
+   	// Implementación del servidor de la aplicación distribuida
+	while(1)
+	{
+		
+		char buf[TAMBUF];
+		struct sockaddr_in dir_cli;
+		int length = sizeof dir_cli;
+		int leidos = recvfrom(sock, buf, TAMBUF, 0,
+		(struct sockaddr *)&dir_cli, &length);
+		buf[leidos] = '\0';
+
+		//msg = atoi (&buf[4])
+		if(strncmp(buf, COMANDOS[0], 4) == 0){
+			// SHOW
+			param = 0;
+			msg = atoi(&buf[5]);
+
+			// Limpiar LCD y imprimir vensaje de llegada de comando
+			LCD_erase();
+			LCD_text(0,0,PANTALLA[param][0]);
+
+			// MOSTRAR NUM LEDS (LED)
+			LEDR_set(msg);
+
+			// MOSTRAR NUM DISP (DECIMAL)
+			HEX_set(msg);
+
+			KEY_read(&key); // Borrar buffer
+			key=0; // Forzar variable key 0
+			// While botton
+			while(key == 0){
+				KEY_read(&key);
+			}
+
+			//error -> 1 (no EXISTE ERROR) SIEMPRE MANDAR 0
+			flag_COM_RES = 0;
+
+			LCD_erase();
+			LCD_text(0,0,PANTALLA[param][1]);
+	
+			//Lipiar led
+			LEDR_set(0);
+			HEX_set(0);
+
+		}else if (strncmp(buf, COMANDOS[1], 4) == 0){
+			// TEST
+			msg = atoi(&buf[5]);
+			param = 1;
+
+			// Limpiar LCD y imprimir vensaje de llegada de comando
+			LCD_erase();
+			LCD_text(0,0,PANTALLA[param][0]);
+			
+			// MOSTRAR NUM DISP (DECIMAL)
+			HEX_set(msg);
+
+			// PUSH botton while()
+			KEY_read(&key);
+			key = 0;
+			while(key  == 0){
+				KEY_read(&key);
+				SW_read(&ins);
+				LEDR_set(ins);
+			}
+
+			// Lectura de SW
+			SW_read(&ins);
+			//printf("Ins = %d y msg = %d\n", ins, msg);
+			if(msg != ins){
+				//printf("Incorrecta\n");
+				flag_COM_RES = 1;
+				LCD_erase();
+				LCD_text(0,6,PANTALLA[param][1]);
+			}else{
+				//printf("Correcta\n");
+				flag_COM_RES = 0;
+				LCD_erase();
+				LCD_text(0,6,PANTALLA[param][2]); 
+			}
+
+			LEDR_set(0);
+			HEX_set(0);
+			
+		}else if (strncmp(buf, COMANDOS[2], 4) == 0){
+			// WIPE
+			param = 2;
+			
+			// Limpiar LCD y imprimir vensaje de llegada de comando
+			LCD_erase();
+			LCD_text(0,0,PANTALLA[param][0]);
+
+
+			KEY_read(&key);
+			key = 0;
+			while(key == 0){
+				KEY_read(&key);
+			}
+
+			SW_read(&ins);
+			
+			if (ins != 0){
+				//printf("INCORRECTA\n");
+				flag_COM_RES = 1;
+				// Limpiar LCD y imprimir vensaje de llegada de comando
+				LCD_erase();
+				LCD_text(0,0,PANTALLA[param][1]);
+			}else{
+				//printf("Correcta\n");
+				flag_COM_RES = 0;
+				// Limpiar LCD y imprimir vensaje de llegada de comando
+				LCD_erase();
+				LCD_text(0,0,PANTALLA[param][2]);
+			}
+
+		}
+
+		// Enviar mensaje por el socket
+		sprintf(buf, "%s:%1d", RESPUESTAS[flag_COM_RES],param); 
+		sendto(sock, buf, leidos, 0, (struct sockaddr *) &dir_cli, length);
+
+    }
+	
+	exit(0);
+}
+
+// Funciones auxiliares
+// character to single digit
+int ctoi (char ch){
+	if (ch >= '0' && ch <= '9' ) return ch - '0';
+	return -1; //error
+}
